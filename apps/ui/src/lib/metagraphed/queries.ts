@@ -29,6 +29,8 @@ import type {
   SourceHealthProvider,
   AccountAxonRemovals,
   AccountAxonRemovalsSubnet,
+  AccountCounterparties,
+  AccountCounterparty,
   AccountWeightSetters,
   AccountWeightSettersSubnet,
   AccountBalance,
@@ -176,6 +178,7 @@ const MAX_EXTRINSIC_COLLECTION_ENTRIES = 64;
 const MAX_EXTRINSIC_STRING_LENGTH = 2_000;
 const MAX_ACCOUNT_REGISTRATIONS = 100;
 const MAX_ACCOUNT_POSITIONS = 256;
+const MAX_ACCOUNT_COUNTERPARTIES = 100;
 const MAX_ACCOUNT_HISTORY_DAYS = 180;
 const MAX_ACCOUNT_DAY_EVENT_KINDS = 32;
 const MAX_CHAIN_ACTIVITY_DAYS = 31;
@@ -2339,6 +2342,68 @@ export const accountWeightSettersQuery = (ss58: string, window = "30d") =>
       );
       return {
         data: normalizeAccountWeightSetters(ss58, res.data),
+        meta: res.meta,
+        url: res.url,
+      };
+    },
+    staleTime: STALE_MED,
+  });
+
+function normalizeAccountCounterparty(raw: unknown): AccountCounterparty | null {
+  if (!isRecord(raw)) return null;
+  const address = firstString(raw.address);
+  if (address == null) return null;
+  return {
+    address,
+    sent_tao: firstFiniteNumber(raw.sent_tao) ?? 0,
+    received_tao: firstFiniteNumber(raw.received_tao) ?? 0,
+    net_tao: firstFiniteNumber(raw.net_tao) ?? 0,
+    transfer_count: firstFiniteNumber(raw.transfer_count) ?? 0,
+    last_block: firstFiniteNumber(raw.last_block) ?? null,
+  };
+}
+
+// Top transfer counterparties for one account by volume (#3340) — the other side
+// of each native-TAO Balances.Transfer this account is party to, ranked by
+// sent + received. Every numeric cell coerces defensively: counts and totals fall
+// through to 0 (never NaN), last_block to null, and rows lacking a valid address
+// are dropped, so a cold store or junk degrades to a schema-stable empty card.
+export function normalizeAccountCounterparties(ss58: string, raw: unknown): AccountCounterparties {
+  const rec = isRecord(raw) ? raw : {};
+  const counterparties = Array.isArray(rec.counterparties)
+    ? rec.counterparties.slice(0, MAX_ACCOUNT_COUNTERPARTIES).flatMap((row) => {
+        const normalized = normalizeAccountCounterparty(row);
+        return normalized ? [normalized] : [];
+      })
+    : [];
+  return {
+    schema_version: firstFiniteNumber(rec.schema_version) ?? 1,
+    ss58: firstString(rec.ss58) ?? ss58,
+    counterparty_count: firstFiniteNumber(rec.counterparty_count) ?? counterparties.length,
+    transfers_scanned: firstFiniteNumber(rec.transfers_scanned) ?? 0,
+    scan_capped: booleanValue(rec.scan_capped) ?? false,
+    total_sent_tao: firstFiniteNumber(rec.total_sent_tao) ?? 0,
+    total_received_tao: firstFiniteNumber(rec.total_received_tao) ?? 0,
+    counterparties,
+  };
+}
+
+/**
+ * Top transfer counterparties for one account (#3340) — list mode of the
+ * /counterparties tier, newest-first volume ranking. Non-blocking on the entity
+ * page; a cold account degrades to an empty counterparties[]. The optional
+ * `limit` caps how many ranked rows the tier returns.
+ */
+export const accountCounterpartiesQuery = (ss58: string, limit?: number) =>
+  queryOptions({
+    queryKey: k("account-counterparties", ss58, limit ?? null),
+    queryFn: async ({ signal }) => {
+      const res = await apiFetch<Partial<AccountCounterparties>>(
+        `/api/v1/accounts/${ss58PathSegment(ss58)}/counterparties`,
+        { params: limit != null ? { limit } : {}, signal },
+      );
+      return {
+        data: normalizeAccountCounterparties(ss58, res.data),
         meta: res.meta,
         url: res.url,
       };

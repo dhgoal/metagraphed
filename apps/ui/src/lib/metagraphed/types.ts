@@ -976,6 +976,34 @@ export interface AccountWeightSetters {
   subnets: AccountWeightSettersSubnet[];
 }
 
+/** One ranked counterparty row in /api/v1/accounts/{ss58}/counterparties. */
+export interface AccountCounterparty {
+  address: string;
+  sent_tao: number;
+  received_tao: number;
+  net_tao: number;
+  transfer_count: number;
+  last_block: number | null;
+}
+
+/**
+ * One account's top transfer counterparties by volume, from
+ * /api/v1/accounts/{ss58}/counterparties — the other side of each native-TAO
+ * Balances.Transfer this account is party to, rolled up over a bounded
+ * newest-first scan. Zeroed with an empty counterparties[] when the account has
+ * no native-TAO transfers.
+ */
+export interface AccountCounterparties {
+  schema_version: number;
+  ss58: string;
+  counterparty_count: number;
+  transfers_scanned: number;
+  scan_capped: boolean;
+  total_sent_tao: number;
+  total_received_tao: number;
+  counterparties: AccountCounterparty[];
+}
+
 /**
  * One neuron position a wallet holds on a subnet, from
  * /api/v1/accounts/{ss58}/portfolio: its economics plus emission/stake yield.

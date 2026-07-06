@@ -30,6 +30,7 @@ import { QueryErrorBoundary } from "@/components/metagraphed/error-boundary";
 import { AccountHistoryChart } from "@/components/metagraphed/account-history-chart";
 import {
   accountAxonRemovalsQuery,
+  accountCounterpartiesQuery,
   accountWeightSettersQuery,
   accountBalanceQuery,
   accountEventsQuery,
@@ -287,6 +288,7 @@ function ValidAccountDetail({ ss58 }: { ss58: string }) {
 
       <AccountExtrinsicsSection rows={signedExtrinsics} isPending={extrinsicsResult.isPending} />
       <AccountTransfersSection ss58={ss58} rows={transfers} isPending={transfersResult.isPending} />
+      <AccountCounterpartiesSection ss58={ss58} />
 
       <div className="mt-6">
         <Link
@@ -309,6 +311,7 @@ function ValidAccountDetail({ ss58 }: { ss58: string }) {
             { label: "history", path: `/api/v1/accounts/${sourceRef}/history` },
             { label: "events", path: `/api/v1/accounts/${sourceRef}/events` },
             { label: "subnets", path: `/api/v1/accounts/${sourceRef}/subnets` },
+            { label: "counterparties", path: `/api/v1/accounts/${sourceRef}/counterparties` },
           ]}
         />
       </SectionAnchor>
@@ -319,6 +322,7 @@ function ValidAccountDetail({ ss58 }: { ss58: string }) {
           `/api/v1/accounts/${sourceRef}/history`,
           `/api/v1/accounts/${sourceRef}/events`,
           `/api/v1/accounts/${sourceRef}/subnets`,
+          `/api/v1/accounts/${sourceRef}/counterparties`,
         ]}
       />
     </>
@@ -554,6 +558,121 @@ function AccountTransfersSection({
                 </tr>
               );
             })}
+          </tbody>
+        </table>
+      </DataPanel>
+    </SectionAnchor>
+  );
+}
+
+/**
+ * Top transfer counterparties (#3340) — the addresses this account most sends
+ * TAO to / receives TAO from, ranked by volume, from the /counterparties tier
+ * (list mode). Non-blocking: while the dedicated query loads (or if it fails),
+ * the section never stalls or errors the rest of the entity page; a cold account
+ * with no native-TAO transfers renders nothing.
+ */
+function AccountCounterpartiesSection({ ss58 }: { ss58: string }) {
+  const result = useQuery(accountCounterpartiesQuery(ss58));
+  const rows = result.data?.data.counterparties ?? [];
+
+  if (result.isPending && rows.length === 0) {
+    return (
+      <AccountFeedSectionSkeleton
+        id="counterparties"
+        title="Counterparties"
+        subtitle="Top addresses this account transacts native TAO with, ranked by volume."
+      />
+    );
+  }
+
+  if (rows.length === 0) return null;
+
+  const volume = rows
+    .slice(0, 12)
+    .map((c) => ({ label: shortHash(c.address) ?? c.address, value: c.sent_tao + c.received_tao }));
+
+  return (
+    <SectionAnchor
+      id="counterparties"
+      title="Counterparties"
+      subtitle="Top addresses this account transacts native TAO with, ranked by volume."
+      tone="accent"
+      info="Aggregated from this account's native-TAO Balances.Transfer feed over a bounded newest-first scan — the other side of each sent/received transfer, rolled up by total volume with net flow."
+      right={<SectionBadge>{formatNumber(rows.length)} rows</SectionBadge>}
+    >
+      {volume.length > 0 ? (
+        <div className="mb-5 rounded-2xl border border-border/80 bg-card/95 px-5 py-4 shadow-[0_18px_50px_-44px_rgba(15,23,42,0.55)]">
+          <div className="mb-3 font-mono text-[10px] uppercase tracking-[0.18em] text-ink-muted">
+            volume by counterparty (τ)
+          </div>
+          <BarMini data={volume} showValue={false} />
+        </div>
+      ) : null}
+      <DataPanel>
+        <table className="w-full text-left text-sm">
+          <thead className="bg-surface/50">
+            <tr>
+              <th className={TH}>Address</th>
+              <th className={`${TH} text-right`}>Sent</th>
+              <th className={`${TH} text-right`}>Received</th>
+              <th className={`${TH} text-right`}>Net flow</th>
+              <th className={`${TH} text-right`}>Transfers</th>
+              <th className={`${TH} text-right`}>Last block</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border">
+            {rows.map((c) => (
+              <tr key={c.address} className="hover:bg-surface/30">
+                <td className="px-5 py-4 font-mono text-[11px] text-ink-muted" title={c.address}>
+                  {c.address !== ss58 ? (
+                    <Link
+                      to="/accounts/$ss58"
+                      params={{ ss58: c.address }}
+                      className="hover:text-accent hover:underline"
+                    >
+                      {shortHash(c.address)}
+                    </Link>
+                  ) : (
+                    (shortHash(c.address) ?? "—")
+                  )}
+                </td>
+                <td className="px-5 py-4 text-right font-mono text-[11px] tabular-nums text-ink">
+                  {formatNumber(c.sent_tao)} τ
+                </td>
+                <td className="px-5 py-4 text-right font-mono text-[11px] tabular-nums text-ink">
+                  {formatNumber(c.received_tao)} τ
+                </td>
+                <td
+                  className={classNames(
+                    "px-5 py-4 text-right font-mono text-[11px] tabular-nums",
+                    c.net_tao > 0
+                      ? "text-emerald-500"
+                      : c.net_tao < 0
+                        ? "text-amber-500"
+                        : "text-ink-muted",
+                  )}
+                >
+                  {formatNumber(c.net_tao)} τ
+                </td>
+                <td className="px-5 py-4 text-right font-mono text-[11px] tabular-nums text-ink">
+                  {formatNumber(c.transfer_count)}
+                </td>
+                <td className="px-5 py-4 text-right font-mono text-[12px]">
+                  {c.last_block != null ? (
+                    <Link
+                      to="/blocks/$ref"
+                      params={{ ref: String(c.last_block) }}
+                      className="text-ink hover:text-accent hover:underline"
+                    >
+                      #{formatNumber(c.last_block)}
+                    </Link>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </DataPanel>
